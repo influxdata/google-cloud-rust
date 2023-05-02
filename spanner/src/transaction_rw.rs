@@ -4,11 +4,11 @@ use std::sync::atomic::{AtomicI64, Ordering};
 
 use prost_types::Struct;
 
-use google_cloud_gax::grpc::{Code, Response, Status};
+use google_cloud_gax::grpc::{Code, Status};
 use google_cloud_gax::retry::{RetrySetting, TryAs};
 use google_cloud_googleapis::spanner::v1::commit_request::Transaction::TransactionId;
-use google_cloud_googleapis::spanner::v1::{commit_request, execute_batch_dml_request, result_set_stats, transaction_options, transaction_selector, BeginTransactionRequest, CommitRequest, CommitResponse, ExecuteBatchDmlRequest, ExecuteSqlRequest, Mutation, ResultSetStats, RollbackRequest, TransactionOptions, TransactionSelector, ResultSet};
-use crate::reader::{Reader, RowIterator, StatementReader};
+use google_cloud_googleapis::spanner::v1::{commit_request, execute_batch_dml_request, result_set_stats, transaction_options, transaction_selector, BeginTransactionRequest, CommitRequest, CommitResponse, ExecuteBatchDmlRequest, ExecuteSqlRequest, Mutation, ResultSetStats, RollbackRequest, TransactionOptions, TransactionSelector};
+use crate::reader::{RowIterator, StatementReader};
 
 use crate::session::ManagedSession;
 use crate::statement::Statement;
@@ -159,7 +159,7 @@ impl ReadWriteTransaction {
         self.update_with_option(stmt, QueryOptions::default()).await
     }
 
-    pub async fn update_resultset(&mut self, stmt: Statement) -> Result<RowIterator, Status> {
+    pub async fn update_and_commit(&mut self, stmt: Statement) -> Result<RowIterator, Status> {
         let options = QueryOptions::default();
         let request = ExecuteSqlRequest {
             session: self.get_session_name(),
@@ -184,10 +184,6 @@ impl ReadWriteTransaction {
         let client = &mut session.spanner_client;
         let result = client.execute_streaming_sql(request.clone(), option.clone().retry).await;
         let res = session.invalidate_if_needed(result).await;
-        /*
-        let sr = Box::new(StatementReader{ request });
-        let result = RowIterator::new(session, sr, Some(options.call_options)).await;
-         */
 
         let opt = CommitOptions::default();
         match res{
@@ -204,7 +200,6 @@ impl ReadWriteTransaction {
                     .commit(req, opt.call_options.retry)
                     .await;
                 session.invalidate_if_needed(result).await?;
-                //Ok(success)
                 let sr = Box::new(StatementReader{ request });
                 RowIterator::new(success.into_inner(), session, sr ).await
             }
