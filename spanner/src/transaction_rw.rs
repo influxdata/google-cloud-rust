@@ -159,7 +159,7 @@ impl ReadWriteTransaction {
         self.update_with_option(stmt, QueryOptions::default()).await
     }
 
-    pub async fn update_resultset(&mut self, stmt: Statement) -> Result<RowIterator, Status>{
+    pub async fn update_resultset(&mut self, stmt: Statement) -> Result<RowIterator, Status> {
         let options = QueryOptions::default();
         let request = ExecuteSqlRequest {
             session: self.get_session_name(),
@@ -173,11 +173,58 @@ impl ReadWriteTransaction {
             seqno: self.sequence_number.fetch_add(1, Ordering::Relaxed),
             query_options: options.optimizer_options,
             request_options: Transaction::create_request_options(options.call_options.priority),
+            data_boost_enabled: false,
         };
 
+        let tx_id = self.tx_id.clone();
+        let mutations = self.wb.to_vec();
+
         let session = self.as_mut_session();
+        let option = options.call_options;
+        let client = &mut session.spanner_client;
+        let result = client.execute_streaming_sql(request.clone(), option.clone().retry).await;
+        let res = session.invalidate_if_needed(result).await;
+        /*
         let sr = Box::new(StatementReader{ request });
-        RowIterator::new(session, sr, Some(options.call_options)).await
+        let result = RowIterator::new(session, sr, Some(options.call_options)).await;
+         */
+
+        let opt = CommitOptions::default();
+        match res{
+            Ok(success) => {
+                let req= CommitRequest {
+                    session: session.session.name.to_string(),
+                    mutations,
+                    transaction: Some(TransactionId(tx_id.clone())),
+                    request_options: Transaction::create_request_options(opt.call_options.priority),
+                    return_commit_stats: opt.return_commit_stats,
+                };
+                let result = session
+                    .spanner_client
+                    .commit(req, opt.call_options.retry)
+                    .await;
+                session.invalidate_if_needed(result).await?;
+                //Ok(success)
+                let sr = Box::new(StatementReader{ request });
+                RowIterator::new(success.into_inner(), session, sr ).await
+            }
+            Err(err) => {
+                if let Some(status) = err.try_as() {
+                    // can't rollback. should retry
+                    if status.code() == Code::Aborted {
+                        return Err(err);
+                    }
+                }
+                let request = RollbackRequest {
+                    transaction_id: tx_id,
+                    session: session.session.name.to_string(),
+                };
+                let result = session.spanner_client.rollback(request, opt.call_options.retry).await;
+                session.invalidate_if_needed(result).await?.into_inner();
+                Err(err)
+            }
+        }
+
     }
 
     pub async fn update_with_option(&mut self, stmt: Statement, options: QueryOptions) -> Result<i64, Status> {
@@ -193,6 +240,7 @@ impl ReadWriteTransaction {
             seqno: self.sequence_number.fetch_add(1, Ordering::Relaxed),
             query_options: options.optimizer_options,
             request_options: Transaction::create_request_options(options.call_options.priority),
+            data_boost_enabled: false,
         };
 
         let session = self.as_mut_session();

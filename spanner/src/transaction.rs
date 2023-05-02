@@ -12,7 +12,7 @@ use google_cloud_googleapis::spanner::v1::{
 };
 
 use crate::key::{Key, KeySet};
-use crate::reader::{AsyncIterator, RowIterator, StatementReader, TableReader};
+use crate::reader::{AsyncIterator, Reader, RowIterator, StatementReader, TableReader};
 use crate::row::Row;
 use crate::session::ManagedSession;
 use crate::statement::Statement;
@@ -111,10 +111,12 @@ impl Transaction {
             seqno: 0,
             query_options: options.optimizer_options,
             request_options: Transaction::create_request_options(options.call_options.priority),
+            data_boost_enabled: false,
         };
         let session = self.session.as_mut().unwrap().deref_mut();
         let reader = Box::new(StatementReader { request });
-        RowIterator::new(session, reader, Some(options.call_options)).await
+        let streaming = reader.read(session, Some(options.call_options)).await?.into_inner();
+        RowIterator::new(streaming, session, reader).await
     }
 
     /// read returns a RowIterator for reading multiple rows from the database.
@@ -167,11 +169,13 @@ impl Transaction {
             resume_token: vec![],
             partition_token: vec![],
             request_options: Transaction::create_request_options(options.call_options.priority),
+            data_boost_enabled: false,
         };
 
         let session = self.as_mut_session();
         let reader = Box::new(TableReader { request });
-        RowIterator::new(session, reader, Some(options.call_options)).await
+        let streaming = reader.read(session, Some(options.call_options)).await?.into_inner();
+        RowIterator::new(streaming, session, reader).await
     }
 
     /// read returns a RowIterator for reading multiple rows from the database.

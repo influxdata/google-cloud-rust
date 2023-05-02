@@ -196,11 +196,11 @@ pub struct RowIterator<'a> {
 
 impl<'a> RowIterator<'a> {
     pub(crate) async fn new(
+        streaming: Streaming<PartialResultSet>,
         session: &'a mut SessionHandle,
         reader: Box<dyn Reader + Sync + Send>,
-        option: Option<CallOptions>,
     ) -> Result<RowIterator<'a>, Status> {
-        let streaming = reader.read(session, option).await?.into_inner();
+        //let streaming = reader.read(session, option).await?.into_inner();
         let rs = ResultSet {
             fields: Arc::new(vec![]),
             index: Arc::new(HashMap::new()),
