@@ -8,6 +8,7 @@ use google_cloud_gax::grpc::{Code, Response, Status};
 use google_cloud_gax::retry::{RetrySetting, TryAs};
 use google_cloud_googleapis::spanner::v1::commit_request::Transaction::TransactionId;
 use google_cloud_googleapis::spanner::v1::{commit_request, execute_batch_dml_request, result_set_stats, transaction_options, transaction_selector, BeginTransactionRequest, CommitRequest, CommitResponse, ExecuteBatchDmlRequest, ExecuteSqlRequest, Mutation, ResultSetStats, RollbackRequest, TransactionOptions, TransactionSelector, ResultSet};
+use crate::reader::{Reader, RowIterator, StatementReader};
 
 use crate::session::ManagedSession;
 use crate::statement::Statement;
@@ -158,7 +159,7 @@ impl ReadWriteTransaction {
         self.update_with_option(stmt, QueryOptions::default()).await
     }
 
-    pub async fn update_resultset(&mut self, stmt: Statement) -> Result<ResultSet, Status>{
+    pub async fn update_resultset(&mut self, stmt: Statement) -> Result<RowIterator, Status>{
         let options = QueryOptions::default();
         let request = ExecuteSqlRequest {
             session: self.get_session_name(),
@@ -175,12 +176,8 @@ impl ReadWriteTransaction {
         };
 
         let session = self.as_mut_session();
-        let result = session
-            .spanner_client
-            .execute_sql(request, options.call_options.retry)
-            .await;
-        let response = session.invalidate_if_needed(result).await?;
-        Ok(response.into_inner())
+        let sr = Box::new(StatementReader{ request });
+        RowIterator::new(session, sr, Some(options.call_options)).await
     }
 
     pub async fn update_with_option(&mut self, stmt: Statement, options: QueryOptions) -> Result<i64, Status> {
