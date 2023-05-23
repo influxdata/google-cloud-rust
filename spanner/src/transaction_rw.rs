@@ -4,10 +4,10 @@ use std::sync::atomic::{AtomicI64, Ordering};
 
 use prost_types::Struct;
 
-use google_cloud_gax::grpc::{Code, Status};
+use google_cloud_gax::grpc::{Code, Response, Status};
 use google_cloud_gax::retry::{RetrySetting, TryAs};
 use google_cloud_googleapis::spanner::v1::commit_request::Transaction::TransactionId;
-use google_cloud_googleapis::spanner::v1::{commit_request, execute_batch_dml_request, result_set_stats, transaction_options, transaction_selector, BeginTransactionRequest, CommitRequest, CommitResponse, ExecuteBatchDmlRequest, ExecuteSqlRequest, Mutation, ResultSetStats, RollbackRequest, TransactionOptions, TransactionSelector};
+use google_cloud_googleapis::spanner::v1::{commit_request, execute_batch_dml_request, result_set_stats, transaction_options, transaction_selector, BeginTransactionRequest, CommitRequest, CommitResponse, ExecuteBatchDmlRequest, ExecuteSqlRequest, Mutation, ResultSetStats, RollbackRequest, TransactionOptions, TransactionSelector, ResultSet};
 use crate::reader::{RowIterator, StatementReader};
 
 use crate::session::ManagedSession;
@@ -222,7 +222,7 @@ impl ReadWriteTransaction {
 
     }
 
-    pub async fn update_with_option(&mut self, stmt: Statement, options: QueryOptions) -> Result<i64, Status> {
+    pub async fn update_with_option_resultset(&mut self, stmt: Statement, options: QueryOptions) -> Result<Response<ResultSet>, Status> {
         let request = ExecuteSqlRequest {
             session: self.get_session_name(),
             transaction: Some(self.transaction_selector.clone()),
@@ -243,8 +243,13 @@ impl ReadWriteTransaction {
             .spanner_client
             .execute_sql(request, options.call_options.retry)
             .await;
-        let response = session.invalidate_if_needed(result).await?;
-        Ok(extract_row_count(response.into_inner().stats))
+        let response = session.invalidate_if_needed(result).await;
+        response
+    }
+
+    pub async fn update_with_option(&mut self, stmt: Statement, options: QueryOptions) -> Result<i64, Status> {
+        let r = self.update_with_option_resultset(stmt, options).await?;
+        Ok(extract_row_count(r.into_inner().stats))
     }
 
     pub async fn batch_update(&mut self, stmt: Vec<Statement>) -> Result<Vec<i64>, Status> {
