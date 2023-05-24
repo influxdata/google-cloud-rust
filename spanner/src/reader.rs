@@ -83,6 +83,7 @@ impl Reader for TableReader {
     }
 }
 
+#[derive(Default)]
 pub struct ResultSet {
     fields: Arc<Vec<Field>>,
     index: Arc<HashMap<String, usize>>,
@@ -91,7 +92,7 @@ pub struct ResultSet {
 }
 
 impl ResultSet {
-    fn next(&mut self) -> Option<Row> {
+    pub fn next(&mut self) -> Option<Row> {
         if !self.rows.is_empty() {
             let column_length = self.fields.len();
             let target_record_is_chunked = self.rows.len() < column_length;
@@ -152,7 +153,7 @@ impl ResultSet {
         }
     }
 
-    fn add(
+    pub fn add(
         &mut self,
         metadata: Option<ResultSetMetadata>,
         mut values: Vec<Value>,
