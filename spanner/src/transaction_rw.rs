@@ -8,6 +8,7 @@ use google_cloud_gax::grpc::{Code, Response, Status};
 use google_cloud_gax::retry::{RetrySetting, TryAs};
 use google_cloud_googleapis::spanner::v1::commit_request::Transaction::TransactionId;
 use google_cloud_googleapis::spanner::v1::{commit_request, execute_batch_dml_request, result_set_stats, transaction_options, transaction_selector, BeginTransactionRequest, CommitRequest, CommitResponse, ExecuteBatchDmlRequest, ExecuteSqlRequest, Mutation, ResultSetStats, RollbackRequest, TransactionOptions, TransactionSelector, ResultSet};
+use crate::reader;
 use crate::reader::{RowIterator, StatementReader};
 
 use crate::session::ManagedSession;
@@ -222,7 +223,7 @@ impl ReadWriteTransaction {
 
     }
 
-    pub async fn update_with_option_resultset(&mut self, stmt: Statement, options: QueryOptions) -> Result<Response<ResultSet>, Status> {
+    pub async fn update_with_option_resultset(&mut self, stmt: Statement, options: QueryOptions) -> Result<reader::ResultSet, Status> {
         let request = ExecuteSqlRequest {
             session: self.get_session_name(),
             transaction: Some(self.transaction_selector.clone()),
@@ -243,8 +244,23 @@ impl ReadWriteTransaction {
             .spanner_client
             .execute_sql(request, options.call_options.retry)
             .await;
-        let response = session.invalidate_if_needed(result).await;
-        response
+        let response = session.invalidate_if_needed(result).await?;
+        let inner_rs = response.into_inner();
+
+        let mut rs = reader::ResultSet::default();
+
+        for (i, r) in inner_rs.rows.into_iter().enumerate() {
+            // reader::ResultSet only uses metadata on the first insert, so this prevents
+            // unnecessary copies
+            let meta = if i == 0 {
+                inner_rs.metadata.clone()
+            } else {
+                None
+            };
+            rs.add(meta, r.values, false)?;
+        }
+
+        Ok(rs)
     }
 
     pub async fn update_with_option(&mut self, stmt: Statement, options: QueryOptions) -> Result<i64, Status> {

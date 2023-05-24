@@ -153,7 +153,7 @@ impl ResultSet {
         }
     }
 
-    pub fn add(
+    pub(crate) fn add(
         &mut self,
         metadata: Option<ResultSetMetadata>,
         mut values: Vec<Value>,
