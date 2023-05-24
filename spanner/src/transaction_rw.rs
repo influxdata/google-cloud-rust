@@ -264,8 +264,28 @@ impl ReadWriteTransaction {
     }
 
     pub async fn update_with_option(&mut self, stmt: Statement, options: QueryOptions) -> Result<i64, Status> {
-        let r = self.update_with_option_resultset(stmt, options).await?;
-        Ok(extract_row_count(r.into_inner().stats))
+        let request = ExecuteSqlRequest {
+            session: self.get_session_name(),
+            transaction: Some(self.transaction_selector.clone()),
+            sql: stmt.sql.to_string(),
+            params: Some(prost_types::Struct { fields: stmt.params }),
+            param_types: stmt.param_types,
+            resume_token: vec![],
+            query_mode: options.mode.into(),
+            partition_token: vec![],
+            seqno: self.sequence_number.fetch_add(1, Ordering::Relaxed),
+            query_options: options.optimizer_options,
+            request_options: Transaction::create_request_options(options.call_options.priority),
+            data_boost_enabled: false,
+        };
+
+        let session = self.as_mut_session();
+        let result = session
+            .spanner_client
+            .execute_sql(request, options.call_options.retry)
+            .await;
+        let response = session.invalidate_if_needed(result).await?;
+        Ok(extract_row_count(response.into_inner().stats))
     }
 
     pub async fn batch_update(&mut self, stmt: Vec<Statement>) -> Result<Vec<i64>, Status> {
