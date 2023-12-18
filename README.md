@@ -1,3 +1,7 @@
+# Notes:
+This was forked internally to make some API improvements with the intent of upstreaming those changes.
+These changes exist on `smith/add-update-resultset`. The repo has been archived because Spanner work is no longer in progress.
+
 # google-cloud-rust
 Rust packages for [Google Cloud Platform](https://cloud.google.com/) services.  
 Providing a high level API for gRPC API like [Google Cloud Go](https://github.com/googleapis/google-cloud-go).
