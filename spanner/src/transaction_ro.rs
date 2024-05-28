@@ -199,6 +199,7 @@ impl BatchReadOnlyTransaction {
                             resume_token: vec![],
                             partition_token: x.partition_token,
                             request_options: Transaction::create_request_options(ro.call_options.priority),
+                            data_boost_enabled: false,
                         },
                     },
                 })
@@ -257,6 +258,7 @@ impl BatchReadOnlyTransaction {
                             seqno: 0,
                             query_options: qo.optimizer_options.clone(),
                             request_options: Transaction::create_request_options(qo.call_options.priority),
+                            data_boost_enabled: false,
                         },
                     },
                 })
@@ -273,6 +275,8 @@ impl BatchReadOnlyTransaction {
         option: Option<CallOptions>,
     ) -> Result<RowIterator<'_>, Status> {
         let session = self.as_mut_session();
-        RowIterator::new(session, Box::new(partition.reader), option).await
+        let reader = Box::new(partition.reader);
+        let streaming = reader.read(session, option).await?.into_inner();
+        RowIterator::new(streaming,  session, reader).await
     }
 }

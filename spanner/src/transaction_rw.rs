@@ -4,14 +4,12 @@ use std::sync::atomic::{AtomicI64, Ordering};
 
 use prost_types::Struct;
 
-use google_cloud_gax::grpc::{Code, Status};
+use google_cloud_gax::grpc::{Code, Response, Status};
 use google_cloud_gax::retry::{RetrySetting, TryAs};
 use google_cloud_googleapis::spanner::v1::commit_request::Transaction::TransactionId;
-use google_cloud_googleapis::spanner::v1::{
-    commit_request, execute_batch_dml_request, result_set_stats, transaction_options, transaction_selector,
-    BeginTransactionRequest, CommitRequest, CommitResponse, ExecuteBatchDmlRequest, ExecuteSqlRequest, Mutation,
-    ResultSetStats, RollbackRequest, TransactionOptions, TransactionSelector,
-};
+use google_cloud_googleapis::spanner::v1::{commit_request, execute_batch_dml_request, result_set_stats, transaction_options, transaction_selector, BeginTransactionRequest, CommitRequest, CommitResponse, ExecuteBatchDmlRequest, ExecuteSqlRequest, Mutation, ResultSetStats, RollbackRequest, TransactionOptions, TransactionSelector, ResultSet};
+use crate::reader;
+use crate::reader::{RowIterator, StatementReader};
 
 use crate::session::ManagedSession;
 use crate::statement::Statement;
@@ -162,6 +160,109 @@ impl ReadWriteTransaction {
         self.update_with_option(stmt, QueryOptions::default()).await
     }
 
+    pub async fn update_and_commit(&mut self, stmt: Statement) -> Result<RowIterator, Status> {
+        let options = QueryOptions::default();
+        let request = ExecuteSqlRequest {
+            session: self.get_session_name(),
+            transaction: Some(self.transaction_selector.clone()),
+            sql: stmt.sql.to_string(),
+            params: Some(prost_types::Struct { fields: stmt.params }),
+            param_types: stmt.param_types,
+            resume_token: vec![],
+            query_mode: options.mode.into(),
+            partition_token: vec![],
+            seqno: self.sequence_number.fetch_add(1, Ordering::Relaxed),
+            query_options: options.optimizer_options,
+            request_options: Transaction::create_request_options(options.call_options.priority),
+            data_boost_enabled: false,
+        };
+
+        let tx_id = self.tx_id.clone();
+        let mutations = self.wb.to_vec();
+
+        let session = self.as_mut_session();
+        let option = options.call_options;
+        let client = &mut session.spanner_client;
+        let result = client.execute_streaming_sql(request.clone(), option.clone().retry).await;
+        let res = session.invalidate_if_needed(result).await;
+
+        let opt = CommitOptions::default();
+        match res{
+            Ok(success) => {
+                let req= CommitRequest {
+                    session: session.session.name.to_string(),
+                    mutations,
+                    transaction: Some(TransactionId(tx_id.clone())),
+                    request_options: Transaction::create_request_options(opt.call_options.priority),
+                    return_commit_stats: opt.return_commit_stats,
+                };
+                let result = session
+                    .spanner_client
+                    .commit(req, opt.call_options.retry)
+                    .await;
+                session.invalidate_if_needed(result).await?;
+                let sr = Box::new(StatementReader{ request });
+                RowIterator::new(success.into_inner(), session, sr ).await
+            }
+            Err(err) => {
+                if let Some(status) = err.try_as() {
+                    // can't rollback. should retry
+                    if status.code() == Code::Aborted {
+                        return Err(err);
+                    }
+                }
+                let request = RollbackRequest {
+                    transaction_id: tx_id,
+                    session: session.session.name.to_string(),
+                };
+                let result = session.spanner_client.rollback(request, opt.call_options.retry).await;
+                session.invalidate_if_needed(result).await?.into_inner();
+                Err(err)
+            }
+        }
+
+    }
+
+    pub async fn update_with_option_resultset(&mut self, stmt: Statement, options: QueryOptions) -> Result<reader::ResultSet, Status> {
+        let request = ExecuteSqlRequest {
+            session: self.get_session_name(),
+            transaction: Some(self.transaction_selector.clone()),
+            sql: stmt.sql.to_string(),
+            params: Some(prost_types::Struct { fields: stmt.params }),
+            param_types: stmt.param_types,
+            resume_token: vec![],
+            query_mode: options.mode.into(),
+            partition_token: vec![],
+            seqno: self.sequence_number.fetch_add(1, Ordering::Relaxed),
+            query_options: options.optimizer_options,
+            request_options: Transaction::create_request_options(options.call_options.priority),
+            data_boost_enabled: false,
+        };
+
+        let session = self.as_mut_session();
+        let result = session
+            .spanner_client
+            .execute_sql(request, options.call_options.retry)
+            .await;
+        let response = session.invalidate_if_needed(result).await?;
+        let inner_rs = response.into_inner();
+
+        let mut rs = reader::ResultSet::default();
+
+        for (i, r) in inner_rs.rows.into_iter().enumerate() {
+            // reader::ResultSet only uses metadata on the first insert, so this prevents
+            // unnecessary copies
+            let meta = if i == 0 {
+                inner_rs.metadata.clone()
+            } else {
+                None
+            };
+            rs.add(meta, r.values, false)?;
+        }
+
+        Ok(rs)
+    }
+
     pub async fn update_with_option(&mut self, stmt: Statement, options: QueryOptions) -> Result<i64, Status> {
         let request = ExecuteSqlRequest {
             session: self.get_session_name(),
@@ -175,6 +276,7 @@ impl ReadWriteTransaction {
             seqno: self.sequence_number.fetch_add(1, Ordering::Relaxed),
             query_options: options.optimizer_options,
             request_options: Transaction::create_request_options(options.call_options.priority),
+            data_boost_enabled: false,
         };
 
         let session = self.as_mut_session();

@@ -83,6 +83,7 @@ impl Reader for TableReader {
     }
 }
 
+#[derive(Default)]
 pub struct ResultSet {
     fields: Arc<Vec<Field>>,
     index: Arc<HashMap<String, usize>>,
@@ -91,7 +92,7 @@ pub struct ResultSet {
 }
 
 impl ResultSet {
-    fn next(&mut self) -> Option<Row> {
+    pub fn next(&mut self) -> Option<Row> {
         if !self.rows.is_empty() {
             let column_length = self.fields.len();
             let target_record_is_chunked = self.rows.len() < column_length;
@@ -152,7 +153,7 @@ impl ResultSet {
         }
     }
 
-    fn add(
+    pub(crate) fn add(
         &mut self,
         metadata: Option<ResultSetMetadata>,
         mut values: Vec<Value>,
@@ -196,11 +197,11 @@ pub struct RowIterator<'a> {
 
 impl<'a> RowIterator<'a> {
     pub(crate) async fn new(
+        streaming: Streaming<PartialResultSet>,
         session: &'a mut SessionHandle,
         reader: Box<dyn Reader + Sync + Send>,
-        option: Option<CallOptions>,
     ) -> Result<RowIterator<'a>, Status> {
-        let streaming = reader.read(session, option).await?.into_inner();
+        //let streaming = reader.read(session, option).await?.into_inner();
         let rs = ResultSet {
             fields: Arc::new(vec![]),
             index: Arc::new(HashMap::new()),
